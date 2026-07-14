@@ -15,11 +15,14 @@
 
 **Why:** I deliberately reused the collection service's approach — a service-layer query-then-raise — rather than relying solely on a database `UniqueConstraint`. Two reasons: (1) it produces a clean, typed domain error the route can map to a meaningful HTTP status, instead of an opaque `IntegrityError`; (2) it keeps the watchlist and collection services symmetric, so the dedup behavior is discoverable to anyone who already knows the collection code. Note: unlike `CollectionEntry`, the `WatchlistEntry` model does not currently carry a `UniqueConstraint`, so this service check is the sole guard. A DB-level constraint would be a defensible belt-and-suspenders follow-up, but it belongs in the model refactor rather than this PR.
 
-**How I verified:** Imports load cleanly; existing suite still passes (4/4). A dedicated duplicate-add test is added under Comment 3 (see `tests/test_watchlist.py`) which asserts the second add raises `AlreadyInWatchlistError` and that only one row exists.
+**How I verified:** Imports load cleanly; existing suite still passes. Comment 3 adds the first watchlist test (`FilmNotFoundError` path). A dedicated duplicate-add test — asserting the second add raises `AlreadyInWatchlistError` and that only one row exists — is a natural next test and is tracked as a candidate for the "second test" stretch goal; it is not yet in the suite.
 
 ## Comment 3 — Missing test
-**What I did:**
-**How I verified:**
+**What I did:** Created `tests/test_watchlist.py` and added `test_add_to_watchlist_nonexistent_film_raises`, the watchlist equivalent of `test_add_to_collection_nonexistent_film_raises`. I mirrored the existing test module's structure rather than inventing my own: the same `app` / `sample_user` / `sample_film` fixtures (in-memory SQLite, app-context teardown) and the same assertion shape — call the service with a `film_id` that isn't in the database and assert `pytest.raises(FilmNotFoundError)`.
+
+**Why:** The reviewer pointed at the collection test as the pattern to follow, so I kept the new file a faithful parallel — a maintainer who knows `test_collection.py` can read `test_watchlist.py` with no surprises. I used the same UUID-string fake id (`00000000-0000-0000-0000-000000000000`) as the collection test; this reads as "definitely not a real id" and stays correct after the Comment 6 int→UUID rebase, so the test won't need touching then. I brought `sample_film` along too so the file is ready for the duplicate-add and happy-path tests that will follow.
+
+**How I verified:** `pytest tests/test_watchlist.py -v` → `1 passed`. The full suite continues to pass.
 
 ## Comment 4 — Default visibility
 **My position:**
