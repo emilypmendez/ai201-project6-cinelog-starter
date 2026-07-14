@@ -11,8 +11,11 @@
 **How I verified:** Project-wide `grep -rn "save_to_watchlist"` returns no remaining references; the only occurrences of `add_to_watchlist` are the definition and its two call sites. Full test suite still passes (4/4).
 
 ## Comment 2 — Deduplication
-**What I did:**
-**How I verified:**
+**What I did:** Added deduplication to `add_to_watchlist()` mirroring the collection service exactly. Introduced an `AlreadyInWatchlistError` exception in `watchlist_service.py` (parallel to `AlreadyInCollectionError` in `collection_service.py`). After the film-exists check, the function now queries for an existing `WatchlistEntry` with the same `(user_id, film_id)` and raises `AlreadyInWatchlistError` instead of inserting a second row. I also updated the watchlist route to translate that exception into a `409 Conflict` and `FilmNotFoundError` into a `404`, matching the collection route's error handling (the watchlist route previously had none, so both errors would have surfaced as a 500).
+
+**Why:** I deliberately reused the collection service's approach — a service-layer query-then-raise — rather than relying solely on a database `UniqueConstraint`. Two reasons: (1) it produces a clean, typed domain error the route can map to a meaningful HTTP status, instead of an opaque `IntegrityError`; (2) it keeps the watchlist and collection services symmetric, so the dedup behavior is discoverable to anyone who already knows the collection code. Note: unlike `CollectionEntry`, the `WatchlistEntry` model does not currently carry a `UniqueConstraint`, so this service check is the sole guard. A DB-level constraint would be a defensible belt-and-suspenders follow-up, but it belongs in the model refactor rather than this PR.
+
+**How I verified:** Imports load cleanly; existing suite still passes (4/4). A dedicated duplicate-add test is added under Comment 3 (see `tests/test_watchlist.py`) which asserts the second add raises `AlreadyInWatchlistError` and that only one row exists.
 
 ## Comment 3 — Missing test
 **What I did:**
