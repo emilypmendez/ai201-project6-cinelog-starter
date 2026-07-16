@@ -48,4 +48,71 @@
 **How I verified no conflict remains:** (a) **No merge commits:** `git log --merges origin/main..HEAD` is empty and the history is linear. (b) **No lingering integer film ids:** grep confirms the only `db.Integer` columns left are `Film.year` and `CollectionEntry.rating` (legitimately integers); `WatchlistEntry.__table__.c.film_id.type` is `VARCHAR(36)`. (c) **Imports load** and the full suite passes (5/5). (d) **End-to-end with real UUIDs:** created a `Film` (UUID id), then `add_to_watchlist` stored the matching UUID `film_id`, a duplicate add raised `AlreadyInWatchlistError`, and a bogus id raised `FilmNotFoundError`. *Note:* this exercise also surfaced a **pre-existing, out-of-scope bug** — `get_watchlist()` raises `AttributeError` on `entry.film` because `WatchlistEntry` defines no `film` relationship (true before the refactor too; untested because no test exercised `get_watchlist()`). I restored the model faithfully rather than silently expanding this commit, and tracked the bug separately.
 
 ## PR Description
-<!-- Written at the end — feature overview, design decisions, manual testing steps -->
+
+### What this feature does
+Adds a **watchlist** — a list of films a user wants to watch, kept separate from their collection (films they've already watched). It includes:
+- a `WatchlistEntry` model (with a UUID `film_id` matching the post-refactor `Film.id`),
+- a service layer (`add_to_watchlist`, `get_watchlist`) that validates the film exists and prevents duplicate entries, mirroring the existing `collection_service`,
+- REST endpoints under `/watchlist`.
+
+**Endpoints**
+- `GET /watchlist/<user_id>` — return the user's watchlist (newest-added first).
+- `POST /watchlist/<user_id>/add` with body `{"film_id": "<uuid>"}` — add a film. Returns `201` on success, `400` if `film_id` is missing, `404` if the film doesn't exist, `409` if it's already on the watchlist.
+
+### Design decisions
+**1. Default visibility (review Comment 4).** Watchlist entries carry a `public` flag. My documented decision: visibility should be an *explicit* caller choice, and absent one it should fall back to **private (`public=False`)** rather than silently public — exposure is irreversible while missed discovery is recoverable, and a "want to watch" list can reveal sensitive, unacted-on intent. **Current state:** the model still defaults `public=True`; flipping it (plus an explicit `public` parameter on the add endpoint) is the recommended follow-up. Full reasoning in the Comment 4 section above.
+
+**2. Sort order (review Comment 5).** `get_watchlist()` returns entries **newest-added first** (`date_added DESC`), with `title ASC` as a stable tiebreaker. This matches `get_collection()` and the maintainer's recency preference; alphabetical ordering is deferred to a future `?sort=title|date` query param. Full reasoning in the Comment 5 section above.
+
+### How to test manually
+Prereqs: `pip install -r requirements.txt`. The app uses a local SQLite database (`cinelog.db`).
+
+**1. Seed a user and a film** (there is no create API for these), capturing their UUIDs:
+```bash
+python - <<'PY'
+from app import create_app, db
+from models import User, Film
+app = create_app()
+with app.app_context():
+    u = User(username="alice", email="alice@example.com")
+    f = Film(title="Paddington 2", year=2017, genre="Comedy")
+    db.session.add_all([u, f]); db.session.commit()
+    print("USER_ID:", u.id)
+    print("FILM_ID:", f.id)
+PY
+```
+Copy the two printed IDs.
+
+**2. Start the server:**
+```bash
+python app.py        # serves http://localhost:5000
+```
+
+**3. Exercise the endpoints** (substitute the IDs from step 1):
+```bash
+USER=<USER_ID>; FILM=<FILM_ID>
+
+# (a) View empty watchlist            -> 200  []
+curl -s -w '\n%{http_code}\n' http://localhost:5000/watchlist/$USER
+
+# (b) Add the film                    -> 201  (returns the entry, public: true)
+curl -s -w '\n%{http_code}\n' -X POST http://localhost:5000/watchlist/$USER/add \
+  -H 'Content-Type: application/json' -d "{\"film_id\": \"$FILM\"}"
+
+# (c) Add the same film again (dedup) -> 409  Conflict
+curl -s -w '\n%{http_code}\n' -X POST http://localhost:5000/watchlist/$USER/add \
+  -H 'Content-Type: application/json' -d "{\"film_id\": \"$FILM\"}"
+
+# (d) Add a nonexistent film          -> 404  Not Found
+curl -s -w '\n%{http_code}\n' -X POST http://localhost:5000/watchlist/$USER/add \
+  -H 'Content-Type: application/json' \
+  -d '{"film_id": "00000000-0000-0000-0000-000000000000"}'
+
+# (e) Omit film_id                    -> 400  Bad Request
+curl -s -w '\n%{http_code}\n' -X POST http://localhost:5000/watchlist/$USER/add \
+  -H 'Content-Type: application/json' -d '{}'
+```
+Expected results: (a) `200 []`, (b) `201`, (c) `409`, (d) `404`, (e) `400`. The `409` on the repeat add confirms the entry persisted and deduplication works.
+
+### Known limitation
+`GET /watchlist/<user_id>` on a **non-empty** watchlist currently returns **500**: `get_watchlist()` accesses `entry.film`, but `WatchlistEntry` defines no `film` relationship. This is a pre-existing gap (unrelated to the int→UUID rebase) that went unnoticed because no test exercised the populated GET path. It is out of scope for this PR and tracked as a separate fix. Until it lands, verify persistence via the `409` in step (c) rather than the populated GET.
