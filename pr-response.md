@@ -1,7 +1,19 @@
 # PR Response Doc — CineLog Watchlist Feature
 
 ## AI Usage
-<!-- Fill in at the end — how you used AI tools during this project -->
+I worked through this PR with Claude Code (Anthropic's CLI) as a pair-programming and review tool. Specific, verifiable uses:
+
+- **Codebase orientation & pattern-matching.** Before changing anything, I had it read `models.py`, `services/collection_service.py`, and `tests/test_collection.py` and surface the conventions to follow: the `verb_to_noun` service naming, the *query-then-raise* deduplication pattern (`AlreadyInCollectionError`), and the fixture/assertion structure of the tests. Comments 1–3 were then written to mirror those patterns rather than invent new ones.
+
+- **Adversarial stress-testing of the two design arguments (Comments 4 & 5).** For each, I wrote a draft and then asked an independent adversarial reviewer: *"What is the single strongest counterargument a rigorous reviewer would raise, and what tradeoff have I not acknowledged?"* This changed my conclusions, not just my wording:
+  - **Comment 4 (visibility):** my draft *defended* `public=True`, arguing a watchlist is lower-sensitivity than viewing history. The critique **inverted that premise** — forward-looking intent (pregnancy, coming-out, recovery films) can be *more* sensitive than consumption because it exposes unacted-on plans — and noted that a mitigation I leaned on (an explicit `public` param) **didn't exist in the code yet**. Both points were correct, so I **reversed my position** to private-by-default. The final argument is the opposite of my first draft, precisely because of the critique.
+  - **Comment 5 (sort order):** my draft agreed with the maintainer's `date_added DESC`. The critique caught that `date_added.desc()` **alone is not a total order** — burst-added rows share near-equal Python-side timestamps and the UUID primary key is random, so the recent cluster would reshuffle between requests and break pagination. The AI identified the *failure mode*; the fix — adding `title ASC` as a stable secondary key and keeping the `Film` join to support it — was my decision. My final argument **builds on** the critique rather than restating the draft.
+
+- **Debugging a subtle rebase failure.** When the int→UUID rebase "succeeded" with no conflict markers but broke imports, I used it to trace *why* `WatchlistEntry` had silently vanished from `models.py` — main's refactor deleted the class, my branch never edited those lines, so the rebase took the deletion. That diagnosis drove the Comment 6 resolution.
+
+- **Verifying behavior and format.** I used it to confirm every endpoint status code in the manual-test section via the app's test client, to check that all commit messages parse as conventional format, and to confirm the final history is linear with no merge commits.
+
+I reviewed and own every change. The adversarial output was treated as *input to revise*, not a verdict to accept — most visibly in the reversed Comment 4 position and the tiebreaker I added in Comment 5.
 
 ## Comment 1 — Rename
 **What I did:** Renamed `save_to_watchlist()` to `add_to_watchlist()` in `services/watchlist_service.py` to match the project's `verb_to_noun` naming convention (compare `add_to_collection()`). Updated both call sites in `routes/watchlist/watchlist.py` — the import on line 8 and the call on line 32. Also updated the docstring's leading verb from "Save" to "Add" so the documentation stays consistent with the new name.
